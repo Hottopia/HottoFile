@@ -1,0 +1,9 @@
+langchain
+faiss-cpu
+sentence-transformers
+transformers
+opencv-python
+pillow
+pytesseract
+openai
+watchdog
