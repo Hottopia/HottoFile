@@ -7,10 +7,10 @@ from PIL import Image
 
 import pdfplumber
 import docx
-import pptx
+import ppt
 import openpyxl
 
-from data_structures.file_info import FileInfo
+from ..data_structures.file_info import FileInfo
 
 
 class FileParser:
@@ -68,7 +68,7 @@ class FileParser:
 
             elif file_ext in ["pptx", "ppt"]:
                 ftype = "document"
-                prs = pptx.Presentation(file_path)
+                prs = ppt.Presentation(file_path)
                 raw_text = []
                 for slide in prs.slides:
                     for shape in slide.shapes:
