@@ -2,7 +2,7 @@ import subprocess
 from typing import List, Optional
 
 class OllamaClassifier:
-    def __init__(self, model: str = "gemma3"):
+    def __init__(self, model: str = "gemma3:4b"):
         self.model = model
 
     def _build_prompt(self, text_summary: str, candidate_labels: List[str], fewshot_examples: Optional[List[dict]] = None) -> str:

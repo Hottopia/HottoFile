@@ -1,111 +1,77 @@
+from typing import List, Dict, Any
 
-import os
-import time
-from subsystems.file_parser import FileParser
-from subsystems.embedding_manager import EmbeddingManager
-from subsystems.classifier import LLMClassifier, Classifier
-from subsystems.feedback_manager import FeedbackManager
-from subsystems.file_monitor import FileMonitor
+# ===== Feedback Manager =====
+class FeedbackManager:
+    def __init__(self):
+        self.feedback_store = []
 
-# --- CONFIGURATION ---
-# IMPORTANT: Set your OpenAI API key as an environment variable named OPENAI_API_KEY
-# You can also set OPENAI_API_BASE if you are using a custom endpoint.
-MONITORED_DIRECTORY = os.path.join(os.path.dirname(__file__), "monitored_files")
+    def add_feedback(self, input_text: str, label: str, reasoning: str):
+        """保存用户反馈样本"""
+        self.feedback_store.append({
+            "input": input_text,
+            "label": label,
+            "reasoning": reasoning
+        })
 
-# --- INITIALIZATION ---
-try:
-    llm_classifier = LLMClassifier()
-    file_parser = FileParser(llm=llm_classifier.client)
-except ValueError as e:
-    print(f"Error initializing LLMClassifier: {e}")
-    print("Please make sure your OPENAI_API_KEY environment variable is set.")
-    exit(1)
+    def get_fewshot_examples(self, k: int = 3) -> List[Dict[str, str]]:
+        """取出最近的 k 条反馈样本"""
+        return self.feedback_store[-k:]
 
-embedding_manager = EmbeddingManager()
-classifier = Classifier(llm_classifier)
-feedback_manager = FeedbackManager()
 
-processed_files = {}
+# ===== Classifier =====
+class Classifier:
+    def __init__(self, llm, feedback_manager: FeedbackManager):
+        self.llm = llm
+        self.feedback_manager = feedback_manager
 
-# --- CORE WORKFLOW ---
-def process_new_file(file_path):
-    print(f"--- Processing new file: {file_path} ---")
-    
-    # 1. Parse the file
-    file_info = file_parser.parse_file(file_path)
-    if not file_info:
-        return
+    def _build_prompt(self, input_text: str) -> str:
+        """构造带 few-shot 样本的 prompt"""
+        examples = self.feedback_manager.get_fewshot_examples()
 
-    # 2. Classify the file
-    file_info = classifier.classify(file_info, embedding_manager)
+        # 拼接 few-shot 样例
+        fewshot_text = "\n".join([
+            f"示例 {i+1}：\n输入：{ex['input']}\n标签：{ex['label']}\n推理：{ex['reasoning']}"
+            for i, ex in enumerate(examples)
+        ])
 
-    # 3. Add to embedding manager
-    if file_info.content.get('text_summary'):
-        embedding_manager.add_file(file_info)
+        prompt = (
+            "你是一个分类模型，请根据输入文本给出分类标签，并提供简要推理。\n\n"
+            "以下是一些示例：\n"
+            f"{fewshot_text if fewshot_text else '（无示例，直接分类）'}\n\n"
+            f"现在请处理新的输入：\n输入：{input_text}\n标签和推理："
+        )
+        return prompt
 
-    # Store for later access
-    processed_files[file_info.file_id] = file_info
+    def classify(self, input_text: str) -> Dict[str, Any]:
+        """调用 LLM 进行分类"""
+        prompt = self._build_prompt(input_text)
+        response = self.llm(prompt)  # 假设 llm(prompt) -> str
 
-    print(f"--- Finished processing: {file_info.name} ---")
-    print(f"  - File ID: {file_info.file_id}")
-    print(f"  - Type: {file_info.type}")
-    print(f"  - Summary: {file_info.content.get('text_summary', 'N/A')}")
-    print(f"  - Final Label: {file_info.final_label}")
-    print("-----------------------------------------")
+        return {
+            "input": input_text,
+            "output": response,
+            "used_examples": self.feedback_manager.get_fewshot_examples()
+        }
 
-# --- MAIN APPLICATION ---
-def main():
-    print("--- Smart File System Initializing ---")
 
-    # Create monitored directory if it doesn't exist
-    if not os.path.exists(MONITORED_DIRECTORY):
-        os.makedirs(MONITORED_DIRECTORY)
-        print(f"Created monitored directory: {MONITORED_DIRECTORY}")
+# ===== Example: Dummy LLM =====
+class DummyLLM:
+    def __call__(self, prompt: str) -> str:
+        # 这里是模拟逻辑，实际换成调用 openai 或其他模型
+        return f"[LLM 输出模拟]\n{prompt[-100:]}"
 
-    # Initialize and start the file monitor
-    file_monitor = FileMonitor(MONITORED_DIRECTORY, process_new_file)
-    file_monitor.start()
 
-    print("--- System Ready ---Dropped files into the 'monitored_files' folder to begin.")
-
-    try:
-        while True:
-            print("\nAvailable commands: [search, feedback, exit]")
-            command = input("> ").strip().lower()
-
-            if command == 'search':
-                query = input("Enter search query: ").strip()
-                if query:
-                    results = embedding_manager.search(query, k=3)
-                    if results:
-                        print("\n--- Search Results ---")
-                        for res in results:
-                            print(f"  - File: {res['file'].name} (ID: {res['file'].file_id}), Distance: {res['distance']:.4f}")
-                    else:
-                        print("No similar files found.")
-            
-            elif command == 'feedback':
-                file_id = input("Enter file ID to provide feedback for: ").strip()
-                if file_id in processed_files:
-                    correct_label = input(f"Enter the correct label for {processed_files[file_id].name}: ").strip()
-                    if correct_label:
-                        feedback_manager.add_feedback(processed_files[file_id], correct_label)
-                    else:
-                        print("Label cannot be empty.")
-                else:
-                    print("File ID not found.")
-
-            elif command == 'exit':
-                break
-            
-            else:
-                print("Unknown command.")
-
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-    finally:
-        file_monitor.stop()
-        print("System shut down.")
-
+# ===== Usage =====
 if __name__ == "__main__":
-    main()
+    fm = FeedbackManager()
+    llm = DummyLLM()
+    clf = Classifier(llm, fm)
+
+    # 添加一些反馈样本
+    fm.add_feedback("今天天气真好", "闲聊", "内容轻松，不涉及任务。")
+    fm.add_feedback("帮我查一下北京天气", "任务请求", "用户明确请求信息。")
+    fm.add_feedback("你觉得我该买iPhone还是华为？", "决策咨询", "涉及选择和建议。")
+
+    # 测试分类
+    res = clf.classify("明天你能帮我写作业吗？")
+    print(res)
